@@ -13,7 +13,7 @@ load_dotenv()
 # ==========================================
 # [설정 영역] 수정 가능한 변수 및 매개변수
 # ==========================================
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "[http://host.docker.internal:11434](http://host.docker.internal:11434)")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.0"))
 MAX_RETRIES = 2  # SQL 문법 오류 발생 시 자가 수정 최대 재시도 횟수
@@ -36,19 +36,13 @@ class TextToSQLService:
         self._init_chains()
 
     def _init_chains(self) -> None:
-        """
-        1) 초기 SQL 생성 체인
-        2) 에러 발생 시 SQL 자가 수정 체인
-        3) 조회 결과 자연어 요약 체인
-        총 3개의 LCEL 체인을 초기화합니다.
-        """
         sql_prompt = ChatPromptTemplate.from_template("""
 당신은 SQLite 데이터베이스 전문가입니다.
 아래 제공된 [데이터베이스 스키마]만을 참고하여 사용자의 [질문]에 답하기 위한 SQLite SELECT 쿼리를 작성하세요.
 
 [작성 규칙]
 1. 설명, 인사말, 마크다운 기호 없이 오직 실행 가능한 SQL 쿼리문만 출력하세요.
-2. 스키마에 정의된 테이블명(customers, products, orders)과 컬럼명만 정확히 사용하세요.
+2. [데이터베이스 스키마]에 정의된 모든 테이블(기본 테이블 및 사용자가 업로드한 신규 테이블)과 컬럼명만 정확히 사용하세요.
 3. 데이터를 삭제하거나 변경하는 쿼리(DROP, DELETE, UPDATE, INSERT)는 절대 작성하지 마세요.
 
 [데이터베이스 스키마]
@@ -68,7 +62,7 @@ SQL 쿼리:
 
 [작성 규칙]
 1. 설명, 인사말, 마크다운 기호 없이 오직 수정된 SQL SELECT 쿼리문만 출력하세요.
-2. 스키마에 실제로 존재하는 컬럼명만 정확히 사용하세요.
+2. 스키마에 실제로 존재하는 테이블명과 컬럼명만 정확히 사용하세요.
 
 [데이터베이스 스키마]
 {schema}
@@ -99,9 +93,6 @@ SQL 쿼리:
         self.answer_chain = answer_prompt | self.llm | StrOutputParser()
 
     def ask(self, question: str, include_summary: bool = True) -> Dict[str, Any]:
-        """
-        자연어 질문을 입력받아 SQL 생성 -> 보안 검증 -> DB 실행(실패 시 자가 수정) -> 요약 답변을 반환합니다.
-        """
         schema_context = self.db_manager.get_schema_context()
 
         raw_sql = self.sql_gen_chain.invoke({
