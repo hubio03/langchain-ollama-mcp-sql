@@ -4,6 +4,10 @@
     container_name: text-to-sql-mcp
     env_file:
       - .env
+    environment:
+      - PYTHONIOENCODING=utf-8
+      - LANG=C.UTF-8
+      - LC_ALL=C.UTF-8
     volumes:
       - .:/app
     extra_hosts:
