@@ -1,0 +1,12 @@
+﻿services:
+  app:
+    build: .
+    container_name: text-to-sql-mcp
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    stdin_open: true
+    tty: true
