@@ -28,7 +28,7 @@ class SQLGuard:
 
     def clean_sql(self, raw_text: str) -> str:
         """
-        LLM 출력에 포함될 수 있는 마크다운 코드 블록(`sql ... `)이나
+        LLM 출력에 포함될 수 있는 마크다운 코드 블록(```sql ... ```)이나
         불필요한 설명 텍스트를 제거하고 순수 SQL 문장만 추출합니다.
         """
         if not raw_text:
@@ -36,8 +36,8 @@ class SQLGuard:
 
         text = raw_text.strip()
 
-        # 1. `sql ... ` 코드 블록이 있다면 내부 텍스트만 추출
-        code_block_match = re.search(r"`(?:sql)?\s*(.*?)\s*`", text, re.DOTALL | re.IGNORECASE)
+        # 1. ```sql ... ``` 코드 블록이 있다면 내부 텍스트만 추출 (백틱 3개 정확히 매칭)
+        code_block_match = re.search(r"```(?:sql)?\s*(.*?)\s*```", text, re.DOTALL | re.IGNORECASE)
         if code_block_match:
             text = code_block_match.group(1).strip()
 
@@ -87,22 +87,5 @@ class SQLGuard:
 
 if __name__ == "__main__":
     guard = SQLGuard(default_limit=100)
-
-    print("================ [SQLGuard 동작 테스트] ================")
-    # 테스트 1: 마크다운 제거 및 LIMIT 100 자동 부착 확인
-    sample_1 = "`sql\nSELECT name, city FROM customers WHERE membership_tier = 'VIP'\n`"
-    print("[테스트 1 - 정상 쿼리 정제 결과]")
-    print(guard.validate_and_secure(sample_1))
-
-    # 테스트 2: 이미 LIMIT이 있는 경우 유지 확인
-    sample_2 = "SELECT * FROM products LIMIT 5;"
-    print("\n[테스트 2 - 기존 LIMIT 유지 결과]")
-    print(guard.validate_and_secure(sample_2))
-
-    # 테스트 3: 위험한 DELETE 쿼리 차단 확인
-    sample_3 = "DELETE FROM orders WHERE status = '주문취소';"
-    print("\n[테스트 3 - 위험 쿼리 차단 결과]")
-    try:
-        guard.validate_and_secure(sample_3)
-    except SQLGuardError as e:
-        print(f"정상 차단 완료 -> {e}")
+    sample = "```sql\nSELECT name, city FROM customers WHERE membership_tier = 'VIP';\n```"
+    print("[마크다운 코드 블록 정제 테스트]:", guard.validate_and_secure(sample))

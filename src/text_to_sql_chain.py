@@ -42,7 +42,6 @@ class TextToSQLService:
         3) 조회 결과 자연어 요약 체인
         총 3개의 LCEL 체인을 초기화합니다.
         """
-        # 1. 초기 SQL 생성 프롬프트 (qwen2.5:3b 모델이 오직 SQL만 출력하도록 명확히 지시)
         sql_prompt = ChatPromptTemplate.from_template("""
 당신은 SQLite 데이터베이스 전문가입니다.
 아래 제공된 [데이터베이스 스키마]만을 참고하여 사용자의 [질문]에 답하기 위한 SQLite SELECT 쿼리를 작성하세요.
@@ -62,11 +61,14 @@ SQL 쿼리:
 """)
         self.sql_gen_chain = sql_prompt | self.llm | StrOutputParser()
 
-        # 2. 에러 발생 시 자가 수정(Self-Correction) 프롬프트
         fix_prompt = ChatPromptTemplate.from_template("""
 당신은 SQLite 쿼리 디버깅 전문가입니다.
 이전에 작성한 SQL 쿼리를 실행하던 중 [오류 메시지]가 발생했습니다.
-[데이터베이스 스키마]를 다시 확인하여 오류가 수정된 올바른 SQLite SELECT 쿼리문만 출력하세요.
+[데이터베이스 스키마]를 다시 확인하여 오류가 수정된 올바른 SQLite SELECT 쿼리문을 작성하세요.
+
+[작성 규칙]
+1. 설명, 인사말, 마크다운 기호 없이 오직 수정된 SQL SELECT 쿼리문만 출력하세요.
+2. 스키마에 실제로 존재하는 컬럼명만 정확히 사용하세요.
 
 [데이터베이스 스키마]
 {schema}
@@ -84,7 +86,6 @@ SQL 쿼리:
 """)
         self.sql_fix_chain = fix_prompt | self.llm | StrOutputParser()
 
-        # 3. DB 조회 결과 요약 프롬프트
         answer_prompt = ChatPromptTemplate.from_template("""
 사용자의 [질문]에 대해 데이터베이스를 조회한 결과입니다.
 아래 정보를 바탕으로 사용자에게 친절하고 명확한 한국어로 답변을 작성하세요.
@@ -103,7 +104,6 @@ SQL 쿼리:
         """
         schema_context = self.db_manager.get_schema_context()
 
-        # 1단계: 초안 SQL 생성
         raw_sql = self.sql_gen_chain.invoke({
             "schema": schema_context,
             "question": question
@@ -115,13 +115,9 @@ SQL 쿼리:
 
         while attempt <= MAX_RETRIES:
             try:
-                # 2단계: 보안 가드레일 검증 및 LIMIT 100 자동 부착
                 secured_sql = self.sql_guard.validate_and_secure(current_raw_sql)
-
-                # 3단계: 읽기 전용 DB 실행
                 rows = self.db_manager.execute_readonly_query(secured_sql)
 
-                # 4단계: 성공 시 자연어 요약 생성 후 결과 반환
                 summary = ""
                 if include_summary:
                     summary = self.answer_chain.invoke({
@@ -141,7 +137,6 @@ SQL 쿼리:
                 }
 
             except SQLGuardError as guard_err:
-                # 보안 위반(DELETE, DROP 등)은 재시도하지 않고 즉시 차단 반환
                 return {
                     "success": False,
                     "question": question,
@@ -152,7 +147,6 @@ SQL 쿼리:
                 }
 
             except Exception as db_err:
-                # SQLite 문법/컬럼명 오류 발생 시 자가 수정 시도
                 last_error = str(db_err)
                 attempt += 1
                 if attempt <= MAX_RETRIES:
@@ -164,7 +158,6 @@ SQL 쿼리:
                         "error_msg": last_error
                     })
 
-        # 최대 재시도 횟수 초과 시 실패 결과 반환
         return {
             "success": False,
             "question": question,
@@ -173,19 +166,3 @@ SQL 쿼리:
             "answer": f"SQL 쿼리 생성 및 수정에 실패했습니다. 마지막 오류: {last_error}",
             "attempts": attempt
         }
-
-
-if __name__ == "__main__":
-    service = TextToSQLService()
-
-    test_questions = [
-        "VIP 등급인 고객들의 이름과 도시를 알려줘.",
-        "배송완료 상태인 주문들의 총 결제금액 합계는 얼마야?"
-    ]
-
-    for idx, q in enumerate(test_questions, start=1):
-        print(f"\n================ [질문 {idx}: {q}] ================")
-        result = service.ask(q)
-        print(f"- 실행된 SQL : {result.get('executed_sql')}")
-        print(f"- 조회 데이터: {result.get('data')}")
-        print(f"- AI 요약답변: {result.get('answer')}")
