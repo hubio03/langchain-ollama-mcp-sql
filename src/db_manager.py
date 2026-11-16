@@ -1,65 +1,58 @@
-import os
+﻿import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import List, Dict, Any
+import pandas as pd
 from dotenv import load_dotenv
 
-# .env 파일에서 환경변수 로드
 load_dotenv()
 
 # ==========================================
 # [설정 영역] 수정 가능한 변수 및 매개변수
 # ==========================================
 DEFAULT_DB_PATH = os.getenv("DB_PATH", "data/ecommerce.db")
-SAMPLE_ROWS_COUNT = 2  # LLM에게 스키마와 함께 보여줄 테이블당 샘플 행 개수
+SAMPLE_ROWS_COUNT = 2   # LLM에게 스키마와 함께 보여줄 테이블당 샘플 행 개수
+MAX_CSV_ROWS = 10000    # 업로드 허용할 CSV 최대 행 수 (과부하 방지)
 
 
 class DatabaseManager:
     """
     미니 커머스 SQLite 데이터베이스를 초기화하고,
-    LangChain을 위한 스키마 추출 및 읽기 전용(Read-Only) 쿼리 실행을 담당하는 클래스입니다.
+    CSV 동적 테이블 등록, 스키마 추출 및 읽기 전용(Read-Only) 쿼리 실행을 담당하는 클래스입니다.
     """
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = Path(db_path)
-        # data/ 폴더가 없으면 자동 생성
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def init_sample_db(self) -> None:
-        """
-        고객(customers), 상품(products), 주문(orders) 3개 테이블을 생성하고
-        데이터가 비어 있을 경우 미니 커머스 샘플 데이터를 삽입합니다.
-        """
+        """기본 3개 테이블(customers, products, orders)을 생성하고 초기 데이터를 삽입합니다."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-
-        # 외래키 제약조건 활성화
         cursor.execute("PRAGMA foreign_keys = ON;")
 
-        # 1. 고객(customers) 테이블 생성
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS customers (
                 customer_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 email TEXT UNIQUE NOT NULL,
-                membership_tier TEXT NOT NULL, -- 'VIP', 'Gold', 'Silver'
+                membership_tier TEXT NOT NULL,
                 city TEXT NOT NULL,
-                join_date TEXT NOT NULL        -- 'YYYY-MM-DD'
+                join_date TEXT NOT NULL
             );
         """)
 
-        # 2. 상품(products) 테이블 생성
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS products (
                 product_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 product_name TEXT NOT NULL,
-                category TEXT NOT NULL,        -- '전자기기', '주방용품', '도서' 등
+                category TEXT NOT NULL,
                 price INTEGER NOT NULL,
                 stock_quantity INTEGER NOT NULL
             );
         """)
 
-        # 3. 주문(orders) 테이블 생성 (customers, products와 외래키 연결)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS orders (
                 order_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,26 +60,20 @@ class DatabaseManager:
                 product_id INTEGER NOT NULL,
                 quantity INTEGER NOT NULL,
                 total_amount INTEGER NOT NULL,
-                order_date TEXT NOT NULL,      -- 'YYYY-MM-DD'
-                status TEXT NOT NULL,          -- '배송완료', '배송중', '주문취소'
+                order_date TEXT NOT NULL,
+                status TEXT NOT NULL,
                 FOREIGN KEY (customer_id) REFERENCES customers (customer_id),
                 FOREIGN KEY (product_id) REFERENCES products (product_id)
             );
         """)
 
-        # 기존 데이터 존재 여부 확인 후 비어있을 때만 샘플 데이터 입력
         cursor.execute("SELECT COUNT(*) FROM customers;")
         if cursor.fetchone()[0] == 0:
             self._insert_seed_data(cursor)
             conn.commit()
-            print(f"[INFO] 미니 커머스 샘플 데이터베이스가 생성되었습니다: {self.db_path}")
-        else:
-            print(f"[INFO] 기존 데이터베이스를 사용합니다: {self.db_path}")
-
         conn.close()
 
     def _insert_seed_data(self, cursor: sqlite3.Cursor) -> None:
-        """실습용 미니 커머스 초기 데이터를 삽입합니다."""
         customers_data = [
             ("김민수", "minsu@example.com", "VIP", "서울", "2026-01-15"),
             ("이서연", "seoyeon@example.com", "Gold", "부산", "2026-03-22"),
@@ -124,11 +111,40 @@ class DatabaseManager:
             orders_data,
         )
 
+    def import_csv_to_table(self, df: pd.DataFrame, raw_table_name: str) -> Dict[str, Any]:
+        """
+        업로드된 Pandas DataFrame을 SQLite의 새 테이블로 저장합니다.
+        테이블명과 컬럼명의 공백/특수문자를 언더스코어(_)로 정제하여 SQL 호환성을 보장합니다.
+        """
+        if not self.db_path.exists():
+            self.init_sample_db()
+
+        if len(df) > MAX_CSV_ROWS:
+            raise ValueError(f"CSV 행 수가 최대 허용치({MAX_CSV_ROWS}행)를 초과했습니다.")
+
+        clean_table = re.sub(r"[^a-zA-Z0-9가-힣_]", "_", raw_table_name.strip()).strip("_").lower()
+        if not clean_table or clean_table[0].isdigit():
+            clean_table = f"custom_{clean_table}"
+
+        df_clean = df.copy()
+        df_clean.columns = [
+            re.sub(r"[^a-zA-Z0-9가-힣_]", "_", str(col).strip()).strip("_")
+            for col in df_clean.columns
+        ]
+
+        conn = sqlite3.connect(self.db_path)
+        try:
+            df_clean.to_sql(clean_table, conn, if_exists="replace", index=False)
+            return {
+                "table_name": clean_table,
+                "row_count": len(df_clean),
+                "columns": list(df_clean.columns)
+            }
+        finally:
+            conn.close()
+
     def get_schema_context(self, sample_rows: int = SAMPLE_ROWS_COUNT) -> str:
-        """
-        LLM이 정확한 SQL을 생성할 수 있도록 테이블 생성문(DDL)과
-        각 테이블의 샘플 데이터를 텍스트 형태로 조합하여 반환합니다.
-        """
+        """모든 테이블(동적 추가된 CSV 테이블 포함)의 DDL과 샘플 행을 텍스트로 반환합니다."""
         if not self.db_path.exists():
             self.init_sample_db()
 
@@ -143,8 +159,6 @@ class DatabaseManager:
         schema_parts = []
         for table_name, create_sql in tables:
             part = f"### 테이블: {table_name}\n[스키마 정의]\n{create_sql}\n"
-
-            # 샘플 행 추출
             cursor.execute(f"SELECT * FROM {table_name} LIMIT {sample_rows};")
             col_names = [description[0] for description in cursor.description]
             rows = cursor.fetchall()
@@ -152,21 +166,16 @@ class DatabaseManager:
             part += f"[샘플 데이터 ({sample_rows}개 행)]\n컬럼: {', '.join(col_names)}\n"
             for row in rows:
                 part += f"데이터: {row}\n"
-
             schema_parts.append(part)
 
         conn.close()
         return "\n".join(schema_parts)
 
     def execute_readonly_query(self, sql_query: str) -> List[Dict[str, Any]]:
-        """
-        URI 읽기 전용 모드(?mode=ro)로 DB에 연결하여 SELECT 쿼리를 안전하게 실행하고,
-        컬럼명과 값이 매핑된 딕셔너리 리스트를 반환합니다.
-        """
+        """URI 읽기 전용 모드(?mode=ro)로 SELECT 쿼리를 실행합니다."""
         if not self.db_path.exists():
             self.init_sample_db()
 
-        # mode=ro 옵션을 통해 INSERT, UPDATE, DELETE, DROP 등을 엔진 레벨에서 차단
         conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -177,24 +186,3 @@ class DatabaseManager:
             return [dict(row) for row in rows]
         finally:
             conn.close()
-
-
-if __name__ == "__main__":
-    # 단독 실행 테스트: DB 초기화 -> 스키마 출력 -> 샘플 JOIN 쿼리 실행 테스트
-    db = DatabaseManager()
-    db.init_sample_db()
-
-    print("\n================ [추출된 DB 스키마 정보] ================")
-    print(db.get_schema_context())
-
-    print("================ [읽기 전용 JOIN 쿼리 테스트] ================")
-    test_sql = """
-        SELECT c.name AS 고객명, p.product_name AS 상품명, o.total_amount AS 결제금액, o.status AS 주문상태
-        FROM orders o
-        JOIN customers c ON o.customer_id = c.customer_id
-        JOIN products p ON o.product_id = p.product_id
-        WHERE o.status = '배송완료';
-    """
-    results = db.execute_readonly_query(test_sql)
-    for row in results:
-        print(row)
