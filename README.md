@@ -1,6 +1,6 @@
 ﻿# LangChain + Ollama Text-to-SQL MCP Module
 
-[![CI](https://github.com/hubio03/langchain-ollama-mcp-sql/actions/workflows/ci.yml/badge.svg)](https://github.com/hubio03/langchain-ollama-mcp-sql/actions/workflows/ci.yml)
+[![CI](https://github.com/hubio03/langchain-ollama-mcp-sql/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/hubio03/langchain-ollama-mcp-sql/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
 ![Ollama](https://img.shields.io/badge/Ollama-qwen2.5:3b-000000?logo=ollama&logoColor=white)
@@ -95,3 +95,4 @@ docker compose run --rm app python -m src.chat_agent --interactive
 # Streamlit 웹 대시보드 및 CSV 업로더 실행 (브라우저에서 http://localhost:8501 접속)
 docker compose run --rm --service-ports app streamlit run app.py --server.address=0.0.0.0
 ```
+
